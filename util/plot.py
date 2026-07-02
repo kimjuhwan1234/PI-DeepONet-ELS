@@ -77,6 +77,26 @@ def scatter_grid(preds, order=None, path=None, ncol=4):
     return fig
 
 
+def speed_bar(speed_df, path=None):
+    """speed_df: index=model, cols include per_product_us, products_per_sec. 추론 지연시간(로그축)."""
+    d = speed_df.sort_values("per_product_us")
+    names = list(d.index)
+    vals = d["per_product_us"].values
+    fig, ax = plt.subplots(figsize=(11, max(3.2, 0.5 * len(names) + 1.4)))
+    ax.barh(names[::-1], vals[::-1], color=[model_color(x) for x in names][::-1])
+    ax.set_xscale("log")
+    ax.set_xlabel("inference latency per product (microseconds, log scale)  -  lower = faster")
+    ax.set_title("Prediction speed - walk-forward fold-0 test (train time excluded)")
+    ax.tick_params(labelsize=8)
+    for i, (v, pps) in enumerate(zip(vals[::-1], d["products_per_sec"].values[::-1])):
+        ax.text(v, i, f"  {v:.1f}us  ({pps:,.0f}/s)", va="center", fontsize=7.5)
+    ax.margins(x=0.18)
+    fig.tight_layout()
+    if path:
+        fig.savefig(path, dpi=90, bbox_inches="tight")
+    return fig
+
+
 def stage_r2_bar(stage_df, path=None):
     """stage_df: index=model, columns=[stage1_MC_R2, stage2_resid_R2, final_FAIR_R2]."""
     labels = list(stage_df.index)
