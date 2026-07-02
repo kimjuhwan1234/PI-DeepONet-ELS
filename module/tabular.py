@@ -13,11 +13,12 @@ from catboost import CatBoostRegressor
 from .data import featnum, CAT, time_weights
 
 
-def fit_tab(D, cfg, model, tr, te, feat, target, tw=True):
-    """train 에만 fit, 시간가중. target: 전체 길이 배열, feat: 'base'|'regime'."""
+def fit_tab(D, cfg, model, tr, te, feat, target, tw=True, return_predictor=False):
+    """train 에만 fit, 시간가중. target: 전체 길이 배열, feat: 'base'|'regime'.
+    return_predictor=True 이면 (preds, predictor) 반환 — predictor(idx)는 D.ml 행 idx의 예측(추론 속도 측정용)."""
     num = featnum(feat)
     X = D.ml[num + CAT]
-    Xtr, Xte = X.iloc[tr], X.iloc[te]
+    Xtr = X.iloc[tr]
     ytr = target[tr]
     w = time_weights(D, tr) if tw else None
     P = cfg["tabular"]
@@ -41,23 +42,28 @@ def fit_tab(D, cfg, model, tr, te, feat, target, tw=True):
         m = Ridge(alpha=P["ridge"]["alpha"]).fit(
             ct.transform(Xtr), ytr, sample_weight=w
         )
-        return m.predict(ct.transform(Xte))
-    if model == "gbm":
+        predictor = lambda idx: m.predict(ct.transform(X.iloc[idx]))
+    elif model == "gbm":
         m = HistGradientBoostingRegressor(
             categorical_features=CAT, random_state=0, **P["gbm"]
         )
         m.fit(Xtr, ytr, sample_weight=w)
+        predictor = lambda idx: m.predict(X.iloc[idx])
     elif model == "lgbm":
         m = lgb.LGBMRegressor(random_state=0, verbose=-1, **P["lgbm"])
         m.fit(Xtr, ytr, categorical_feature=CAT, sample_weight=w)
+        predictor = lambda idx: m.predict(X.iloc[idx])
     elif model == "cat":
         m = CatBoostRegressor(random_seed=0, verbose=0, cat_features=CAT, **P["cat"])
         m.fit(Xtr, ytr, sample_weight=w)
+        predictor = lambda idx: m.predict(X.iloc[idx])
     elif model == "xgb":
         m = xgb.XGBRegressor(
             tree_method="hist", enable_categorical=True, random_state=0, **P["xgb"]
         )
         m.fit(Xtr, ytr, sample_weight=w)
+        predictor = lambda idx: m.predict(X.iloc[idx])
     else:
         raise ValueError(model)
-    return m.predict(Xte)
+    preds = predictor(te)
+    return (preds, predictor) if return_predictor else preds

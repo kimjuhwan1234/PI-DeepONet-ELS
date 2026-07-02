@@ -26,6 +26,19 @@ class PIOperator(nn.Module):
         return (self.b(bx) * trunk).sum(-1) + self.b0
 
 
+class MarginOperator(nn.Module):
+    """stage-2 잔차 마진 DeepONet: branch=MLP(리스크 vol·corr + 금리 r), trunk=MLP(계약·발행·범주형).
+    내적으로 잔차(FAIR−MC−recent_margin) 회귀."""
+    def __init__(self, nb, nt, P):
+        super().__init__()
+        self.b = mlp(nb, P)          # branch: 리스크(vol·corr) + 금리
+        self.t = mlp(nt, P)          # trunk: 나머지(계약+발행+범주형 one-hot)
+        self.b0 = nn.Parameter(torch.zeros(1))
+
+    def V(self, bx, tx):
+        return (self.b(bx) * self.t(tx)).sum(-1) + self.b0
+
+
 class CurveOperatorV2(nn.Module):
     """DeepONet-Curve: branch=1D-CNN(곡선)+vol·corr 융합, trunk=계약. 스팟 없음."""
     def __init__(self, nvc, ncon, P):

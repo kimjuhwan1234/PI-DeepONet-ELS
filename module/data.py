@@ -27,6 +27,7 @@ RENAME = {
     "ptype": "PRODUCT_TYPE", "rdmp": "RDMP_TYPE", "iyear": "ISU_DT_year",
     "imonth": "ISU_DT_month", "subdays": "SUB_END_DT-SUB_START_DT",
     "K": "STRK_1_last/100", "Kfirst": "STRK_1_first/100",
+    "item": "ITEM_CD",   # 행 식별 인덱스 (훈련 미사용, 예측→상품 추적용)
 }
 INV = {v: k for k, v in RENAME.items()}
 
@@ -48,8 +49,12 @@ VOLCORR = ["sig1", "sig2", "sig3", "rho12", "rho13", "rho23", "sig_eff"]   # bra
 UC = [f"u{j}" for j in range(10)]                                         # branch: 수익률곡선 10노드
 NSTRK = 12
 STRK = [f"strk_{j}" for j in range(NSTRK)]                                # trunk: 전체 오토콜 STRK 스케줄(/100, 패딩)
+
+# ml BASE 에도 전체 행사가 스케줄 포함 (deeponet trunk 와 동일 정보). K/Kfirst 는 파생피처(b_over_k, stepdown)용으로 유지.
+BASE = BASE + STRK
 CONTRACT = STRK + [_new("B"), _new("coupon"), _new("tenor")]              # trunk: 계약(STRK + 배리어 + 쿠폰 + 만기)
 
+INDEX = _new("item")      # ITEM_CD (행 식별 인덱스, 훈련 미사용)
 TARGET = _new("fair")     # FAIR_VALUE/ISU_PRC_DETAIL
 ANCHOR = _new("mc")       # MC
 MARGIN = "recent_margin"
@@ -102,7 +107,7 @@ def build_datasets():
     """원천 -> data/ml.csv, data/pi_deeponet.csv, data/deeponet.csv 생성."""
     fm.ensure_dirs()
     df = _load_source()
-    common = [ORDER, TARGET, ANCHOR, MARGIN]
+    common = [INDEX, ORDER, TARGET, ANCHOR, MARGIN]   # INDEX(ITEM_CD) 선두 — 모든 데이터셋에 인덱스 컬럼
 
     def write(name, new_cols):
         new_cols = list(dict.fromkeys(new_cols))
@@ -111,11 +116,11 @@ def build_datasets():
         out.to_csv(fm.dataset(name), index=False, encoding=CSV_ENC)
         return list(out.columns)
 
-    cols_ml = write("ml", BASE + REG + CAT + common)
+    cols_ml = write("ml", [INDEX] + BASE + REG + CAT + common)
     # PI-DeepONet: branch(vol·corr + 곡선) + trunk(계약) + r(물리) + aux
-    cols_pi = write("pi_deeponet", VOLCORR + UC + CONTRACT + [RF] + common)
+    cols_pi = write("pi_deeponet", [INDEX] + VOLCORR + UC + CONTRACT + [RF] + common)
     # DeepONet(curve, 데이터기반): branch(곡선 + vol·corr) + trunk(계약) + r + aux
-    cols_dn = write("deeponet", UC + VOLCORR + CONTRACT + [RF] + common)
+    cols_dn = write("deeponet", [INDEX] + UC + VOLCORR + CONTRACT + [RF] + common)
     return {"ml": len(df), "pi_deeponet": len(df), "deeponet": len(df),
             "columns": {"ml": cols_ml, "pi_deeponet": cols_pi, "deeponet": cols_dn}}
 
@@ -136,6 +141,7 @@ def load(cfg):
     D.FAIR = ml[TARGET].values.astype("float32")
     D.MC = ml[ANCHOR].values.astype("float32")
     D.rm = ml[MARGIN].values.astype("float32")
+    D.ITEM = ml[INDEX].astype(str).values   # ITEM_CD 인덱스 (훈련 미사용, 예측 추적용)
     D.ORD = ml[ORDER].values.astype(float)
     # 연산자망 입력 (branch=vol·corr+곡선, trunk=계약)
     D.VC = pi[VOLCORR].values.astype("float32")       # (n, 7)

@@ -35,4 +35,4 @@ tabular:                          # 직접 벤치마크 + 하이브리드 stage-
 
 margin:
   model: xgb                      # 하이브리드 stage-2 잔차모델 종류
-  feature_set: base               # base|regime  (마진모델 피처 세트)
+  feature_set: base               # base|regime  (base가 OOS 최적: regime은 비정상 레짐피처로 외삽 실패)
