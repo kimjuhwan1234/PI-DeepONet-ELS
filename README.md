@@ -103,7 +103,6 @@ pip install -r requirements.txt          # Python 3.11; see note on PyTorch/CUDA
 jupyter nbconvert --to notebook --execute --inplace 0_data.ipynb     # -> data/*.parquet
 jupyter nbconvert --to notebook --execute --inplace 1_run.ipynb      # -> result/predictions/
 jupyter nbconvert --to notebook --execute --inplace 2_evaluate.ipynb # -> result/{image,statistics}/
-jupyter nbconvert --to notebook --execute --inplace 3_validate.ipynb # provenance + result check
 ```
 
 All hyperparameters (seed, iterations, learning rate, tree parameters, walk-forward boundaries, RBF grid)
