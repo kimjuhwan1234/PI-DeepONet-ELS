@@ -129,16 +129,11 @@ are edited in **`config.yaml`** only. Paths are resolved through **`util/file_ma
 
 The methods build on the following works (PDFs in `paper/`):
 
-1. L. Lu, P. Jin, G. Pang, Z. Zhang, G. E. Karniadakis. *Learning nonlinear operators via DeepONet based on
-   the universal approximation theorem of operators.* **Nature Machine Intelligence** 3(3):218–229, 2021.
-2. S. Wang, H. Wang, P. Perdikaris. *Learning the solution operator of parametric partial differential
-   equations with physics-informed DeepONets.* **Science Advances** 7(40):eabi8605, 2021.
-3. S. Lee, J. Huh, S. Jeong. *DeepONet-based surrogate modeling for bond option pricing.*
-   **AIMS Mathematics** 11(3):5853–5896, 2026.
-4. P. C. Andreou, C. Han, N. Li. *Stock options pricing via machine learning methods combined with firm
-   characteristics.* Working paper, 2023.
-5. A. Jiao, Q. Yan, J. Harlim, L. Lu. *Solving forward and inverse PDE problems on unknown manifolds via
-   physics-informed neural operators.* **arXiv preprint**, 2024.
+1. Lu, Lu, et al. "Learning nonlinear operators via DeepONet based on the universal approximation theorem of operators." *Nature machine intelligence* 3.3 (2021): 218–229.
+2. Wang, Sifan, Hanwen Wang, and Paris Perdikaris. "Learning the solution operator of parametric partial differential equations with physics-informed DeepONets." *Science advances* 7.40 (2021): eabi8605.
+3. Lee, Sanghyun, Jeonggyu Huh, and Seungwon Jeong. "DeepONet-based surrogate modeling for bond option pricing." *AIMS Mathematics* 11.3 (2026): 5853.
+4. Andreou, Panayiotis C., Chulwoo Han, and Nan Li. "Stock options pricing via machine learning methods combined with firm characteristics." (2023).
+5. Jiao, Anran, et al. "Solving forward and inverse PDE problems on unknown manifolds via physics-informed neural operators." *arXiv preprint* arXiv:2407.05477 (2024).
 
 ```bibtex
 @article{lu2021learning,
@@ -175,7 +170,7 @@ The methods build on the following works (PDFs in `paper/`):
 @article{jiao2024solving,
   author  = {Jiao, Anran and Yan, Qile and Harlim, John and Lu, Lu},
   title   = {Solving forward and inverse {PDE} problems on unknown manifolds via physics-informed neural operators},
-  journal = {arXiv preprint},
+  journal = {arXiv preprint arXiv:2407.05477},
   year    = {2024}
 }
 ```
