@@ -1,15 +1,13 @@
 # -*- coding: utf-8 -*-
-"""연산자망 학습 루프. 결과 재현을 위해 검증된 로직을 그대로 이식 (동일 seed/NIT/draw 순서)."""
+"""연산자망 학습.
+ train_pi    : PI-DeepONet (branch=vol·corr+곡선, trunk=계약+S,τ,I) + BS-PDE 물리. MC 앵커.
+ train_curve : DeepONet-Curve (CNN 곡선+vol·corr, trunk=계약). 데이터기반. target=MC(하이브리드) 또는 FAIR(직접).
+"""
+import numpy as np
 import torch
 
-from .data import to_tensor, curve_prep, don_direct_prep, DPHYS, DNPN
-from .networks import OperatorMLP, DONdirect, CurveOperator
-from .physics import (
-    terminal_payoff_mlp,
-    bs_residual_mlp,
-    terminal_payoff_curve,
-    bs_residual_curve,
-)
+from .data import to_tensor, zstats, VOLCORR, UC, CONTRACT
+from .networks import PIOperator, CurveOperatorV2
 
 
 def _rf(k, a, b, dev):
@@ -17,236 +15,84 @@ def _rf(k, a, b, dev):
 
 
 def _opt(net, cfg):
-    return torch.optim.Adam(
-        net.parameters(), cfg["train"]["lr"], weight_decay=cfg["train"]["weight_decay"]
-    )
+    return torch.optim.Adam(net.parameters(), cfg["train"]["lr"], weight_decay=cfg["train"]["weight_decay"])
 
 
-# ===== DeepONet(MLP) / PI-DeepONet(MLP) : OperatorMLP =====
-def train_operator_mlp(D, cfg, tr, te, target, use_physics):
-    """target=D.MC → 하이브리드 MC앵커 / target=D.FAIR → 직접. use_physics=True → PI-DeepONet."""
-    dev = D.DEV
-    B = cfg["train"]["batch"]
-    NIT = cfg["train"]["nit"]
-    wt = cfg["physics"]["terminal_weight"]
-    wp = cfg["physics"]["pde_weight"]
+def _branch_mat(D):
+    """branch 원본 행렬 [vol·corr | 곡선]."""
+    return np.concatenate([D.VC, D.CURVE], 1)
+
+
+# ===== PI-DeepONet (물리, MC 앵커) =====
+def train_pi(D, cfg, tr, te):
+    dev = D.DEV; B = cfg["train"]["batch"]; NIT = cfg["train"]["nit"]; P = cfg["networks"]["P"]
+    wt = cfg["physics"]["terminal_weight"]; wp = cfg["physics"]["pde_weight"]
     torch.manual_seed(cfg["seed"])
-    lo = D.Mv[tr].min(0)
-    hi = D.Mv[tr].max(0)
-    net = OperatorMLP(lo, hi, D.SMAX, cfg["networks"]["mlp_width"], dev).to(dev)
-    opt = _opt(net, cfg)
-    Mt = to_tensor(D.Mv, dev)
-    ym, ysd = float(target[tr].mean()), float(target[tr].std())
-    yt = (to_tensor(target[tr], dev) - ym) / ysd
-    ntr = len(tr)
-    Mtr = Mt[tr]
+    Bmat = _branch_mat(D); Con = D.CON
+    bm, bs = zstats(Bmat, tr); cm, cs = zstats(Con, tr)
+    Bn = to_tensor((Bmat - bm) / bs, dev)          # 정규화 branch
+    Cn = to_tensor((Con - cm) / cs, dev)           # 정규화 contract
+    Conr = to_tensor(Con, dev)                     # 원본 contract (payoff/PDE용)
+    ten = to_tensor(D.TEN, dev); sig = to_tensor(D.SIGEFF, dev); r = to_tensor(D.R, dev)
+    iK, iC, iT, iBar = D.iKlast, D.iCOUPON, D.iTEN, D.iBARR
+    net = PIOperator(Bn.shape[1], Cn.shape[1], P, D.SMAX).to(dev); opt = _opt(net, cfg)
+    ym, ysd = float(D.MC[tr].mean()), float(D.MC[tr].std()); Y = to_tensor((D.MC - ym) / ysd, dev)
+    ntr = len(tr); trt = torch.tensor(tr, device=dev)
+
+    def payoff(cr, S, I):   # worst-of 만기: K=만기행사가(strk_last), coupon, ten, barrier(KI)
+        K = cr[:, iK]; cpn = cr[:, iC]; tn = cr[:, iT]
+        return torch.where(S >= K, 1 + cpn * tn, torch.where(I < 0.5, torch.ones_like(S), S))
+
     for _ in range(NIT):
-        b = torch.randint(0, ntr, (B,), device=dev)
-        m = Mtr[b]
-        l = (
-            (
-                net.V(m, torch.ones(B, device=dev), m[:, 6], torch.zeros(B, device=dev))
-                - yt[b]
-            )
-            ** 2
-        ).mean()
-        if use_physics:
-            S = _rf(B, 0, D.SMAX, dev)
-            for Iv in (0.0, 1.0):
-                Ii = torch.full((B,), Iv, device=dev)
-                l = (
-                    l
-                    + wt
-                    * (
-                        (
-                            net.V(m, S, torch.zeros(B, device=dev), Ii)
-                            - (terminal_payoff_mlp(m, S, Ii) - ym) / ysd
-                        )
-                        ** 2
-                    ).mean()
-                )
-            Ii = (torch.rand(B, device=dev) > 0.5).float()
-            l = (
-                l
-                + wp
-                * (
-                    bs_residual_mlp(
-                        net, m, _rf(B, 0, D.SMAX, dev), _rf(B, 0, 1, dev) * m[:, 6], Ii
-                    )
-                    ** 2
-                ).mean()
-            )
-        opt.zero_grad()
-        l.backward()
-        opt.step()
+        bb = trt[torch.randint(0, ntr, (B,), device=dev)]
+        bx, cx, cr, tn = Bn[bb], Cn[bb], Conr[bb], ten[bb]
+        # 데이터손실: 발행시점 (S=1, τ=tenor, I=0)
+        l = ((net.V(bx, cx, torch.ones(B, device=dev), tn, tn, torch.zeros(B, device=dev)) - Y[bb]) ** 2).mean()
+        # 만기조건
+        S = _rf(B, 0, D.SMAX, dev)
+        for Iv in (0.0, 1.0):
+            Ii = torch.full((B,), Iv, device=dev)
+            l = l + wt * ((net.V(bx, cx, S, torch.zeros(B, device=dev), tn, Ii) - (payoff(cr, S, Ii) - ym) / ysd) ** 2).mean()
+        # BS-PDE 잔차 (σ=sig_eff, r): trunk 좌표 S,τ에 대해 미분
+        Sr = _rf(B, 0, D.SMAX, dev).clone().requires_grad_(True)
+        tr_ = (_rf(B, 0, 1, dev) * tn).clone().requires_grad_(True)
+        Ii = (torch.rand(B, device=dev) > 0.5).float()
+        V = net.V(bx, cx, Sr, tr_, tn, Ii)
+        Vt, = torch.autograd.grad(V.sum(), tr_, create_graph=True)
+        Vs, = torch.autograd.grad(V.sum(), Sr, create_graph=True)
+        Vss, = torch.autograd.grad(Vs.sum(), Sr, create_graph=True)
+        res = -Vt + 0.5 * sig[bb] ** 2 * Sr ** 2 * Vss + r[bb] * Sr * Vs - r[bb] * V
+        l = l + wp * (res ** 2).mean()
+        opt.zero_grad(); l.backward(); opt.step()
+
     net.eval()
     with torch.no_grad():
-
         def p(idx):
-            i = torch.tensor(idx, device=dev) if not torch.is_tensor(idx) else idx
-            return (
-                (
-                    net.V(
-                        Mt[i],
-                        torch.ones(len(idx), device=dev),
-                        Mt[i, 6],
-                        torch.zeros(len(idx), device=dev),
-                    )
-                    * ysd
-                    + ym
-                )
-                .cpu()
-                .numpy()
-            )
-
+            i = torch.tensor(idx, device=dev)
+            return (net.V(Bn[i], Cn[i], torch.ones(len(idx), device=dev), ten[i], ten[i],
+                          torch.zeros(len(idx), device=dev)) * ysd + ym).cpu().numpy()
         return p(tr), p(te)
 
 
-# ===== DeepONet-Curve 직접(FAIR) : DONdirect =====
-def train_don_direct(D, cfg, tr, te):
-    dev = D.DEV
-    B = cfg["train"]["batch"]
-    NIT = cfg["train"]["nit"]
-    P = cfg["networks"]["P"]
+# ===== DeepONet-Curve (데이터기반) =====
+def train_curve(D, cfg, tr, te, target):
+    """target=D.MC → 하이브리드 앵커 / target=D.FAIR → 직접."""
+    dev = D.DEV; B = cfg["train"]["batch"]; NIT = cfg["train"]["nit"]; P = cfg["networks"]["P"]
     torch.manual_seed(cfg["seed"])
-    Un, PHn, NPn, CATt, card = don_direct_prep(D, tr)
-    TENt = to_tensor(D.TENv, dev)
-    net = DONdirect(card, len(DPHYS) + len(DNPN), P, D.SMAX).to(dev)
-    opt = _opt(net, cfg)
-    ym, ysd = float(D.FAIR[tr].mean()), float(D.FAIR[tr].std() + 1e-8)
-    ntr = len(tr)
-    trt = torch.tensor(tr, device=dev)
-    tet = torch.tensor(te, device=dev)
-    Y = to_tensor(D.FAIR, dev)
+    um, us = zstats(D.CURVE, tr); vm, vs = zstats(D.VC, tr); cm, cs = zstats(D.CON, tr)
+    Un = to_tensor((D.CURVE - um) / us, dev)
+    Vn = to_tensor((D.VC - vm) / vs, dev)
+    Cn = to_tensor((D.CON - cm) / cs, dev)
+    net = CurveOperatorV2(Vn.shape[1], Cn.shape[1], P).to(dev); opt = _opt(net, cfg)
+    ym, ysd = float(target[tr].mean()), float(target[tr].std() + 1e-8); Y = to_tensor((target - ym) / ysd, dev)
+    ntr = len(tr); trt = torch.tensor(tr, device=dev)
     for _ in range(NIT):
         bb = trt[torch.randint(0, ntr, (B,), device=dev)]
-        pr = net.V(
-            Un[bb],
-            PHn[bb],
-            NPn[bb],
-            CATt[bb],
-            torch.ones(B, device=dev),
-            TENt[bb],
-            TENt[bb],
-        )
-        opt.zero_grad()
-        (((pr - ((Y[bb]) - ym) / ysd)) ** 2).mean().backward()
-        opt.step()
+        pr = net.V(Un[bb], Vn[bb], Cn[bb])
+        opt.zero_grad(); ((pr - Y[bb]) ** 2).mean().backward(); opt.step()
     net.eval()
     with torch.no_grad():
-        fair_te = (
-            (
-                net.V(
-                    Un[tet],
-                    PHn[tet],
-                    NPn[tet],
-                    CATt[tet],
-                    torch.ones(len(te), device=dev),
-                    TENt[tet],
-                    TENt[tet],
-                )
-                * ysd
-                + ym
-            )
-            .cpu()
-            .numpy()
-        )
-    return None, fair_te
-
-
-# ===== DeepONet-Curve 하이브리드 MC앵커 : CurveOperator (use_physics=False=DeepONet, True=PI) =====
-def train_curve_anchor(D, cfg, tr, te, use_physics=False):
-    dev = D.DEV
-    B = cfg["train"]["batch"]
-    NIT = cfg["train"]["nit"]
-    P = cfg["networks"]["P"]
-    wt = cfg["physics"]["terminal_weight"]
-    wp = cfg["physics"]["pde_weight"]
-    torch.manual_seed(cfg["seed"])
-    Un, CATt, card = curve_prep(D, tr)
-    Ct = to_tensor(D.Cond, dev)
-    TENt = to_tensor(D.TENv, dev)
-    cm, cs = D.Cond[tr].mean(0), D.Cond[tr].std(0) + 1e-8
-    net = CurveOperator(card, cm, cs, P, D.SMAX, dev).to(dev)
-    opt = _opt(net, cfg)
-    ym, ysd = float(D.MC[tr].mean()), float(D.MC[tr].std())
-    ntr = len(tr)
-    trt = torch.tensor(tr, device=dev)
-    tet = torch.tensor(te, device=dev)
-    Y = to_tensor(D.MC, dev)
-    for _ in range(NIT):
-        bb = trt[torch.randint(0, ntr, (B,), device=dev)]
-        u = Un[bb]
-        cond = Ct[bb]
-        cats = CATt[bb]
-        ten = TENt[bb]
-        l = (
-            (
-                net.V(
-                    u,
-                    cond,
-                    cats,
-                    torch.ones(B, device=dev),
-                    ten,
-                    ten,
-                    torch.zeros(B, device=dev),
-                )
-                - ((Y[bb]) - ym) / ysd
-            )
-            ** 2
-        ).mean()
-        if use_physics:
-            S = _rf(B, 0, D.SMAX, dev)
-            for Iv in (0.0, 1.0):
-                Ii = torch.full((B,), Iv, device=dev)
-                tp = terminal_payoff_curve(cond, S, Ii, ten)
-                l = (
-                    l
-                    + wt
-                    * (
-                        (
-                            net.V(u, cond, cats, S, torch.zeros(B, device=dev), ten, Ii)
-                            - (tp - ym) / ysd
-                        )
-                        ** 2
-                    ).mean()
-                )
-            Ii = (torch.rand(B, device=dev) > 0.5).float()
-            res = bs_residual_curve(
-                net,
-                u,
-                cond,
-                cats,
-                _rf(B, 0, D.SMAX, dev),
-                _rf(B, 0, 1, dev) * ten,
-                ten,
-                Ii,
-            )
-            l = l + wp * (res**2).mean()
-        opt.zero_grad()
-        l.backward()
-        opt.step()
-    net.eval()
-    with torch.no_grad():
-
         def p(idx):
-            i = torch.tensor(idx, device=dev) if not torch.is_tensor(idx) else idx
-            return (
-                (
-                    net.V(
-                        Un[i],
-                        Ct[i],
-                        CATt[i],
-                        torch.ones(len(idx), device=dev),
-                        TENt[i],
-                        TENt[i],
-                        torch.zeros(len(idx), device=dev),
-                    )
-                    * ysd
-                    + ym
-                )
-                .cpu()
-                .numpy()
-            )
-
+            i = torch.tensor(idx, device=dev)
+            return (net.V(Un[i], Vn[i], Cn[i]) * ysd + ym).cpu().numpy()
         return p(tr), p(te)

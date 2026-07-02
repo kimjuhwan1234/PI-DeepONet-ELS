@@ -30,12 +30,12 @@ class ELSDirectoryPath:
         self.source_file_name = os.path.join(
             self.cache_dir_name, "els3_dataset.parquet"
         )
-        self.ml_dataset_file_name = os.path.join(self.data_dir_name, "ml.parquet")
-        self.deeponet_dataset_file_name = os.path.join(
-            self.data_dir_name, "deeponet.parquet"
+        self.ml_dataset_file_name = os.path.join(self.data_dir_name, "ml.csv")
+        self.pi_deeponet_dataset_file_name = os.path.join(
+            self.data_dir_name, "pi_deeponet.csv"
         )
-        self.deeponet_curve_dataset_file_name = os.path.join(
-            self.data_dir_name, "deeponet_curve.parquet"
+        self.deeponet_dataset_file_name = os.path.join(
+            self.data_dir_name, "deeponet.csv"
         )
 
         ############################################################
@@ -54,8 +54,8 @@ class ELSDirectoryPath:
         # 데이터셋 이름 -> 경로
         self.dataset_files = {
             "ml": self.ml_dataset_file_name,
+            "pi_deeponet": self.pi_deeponet_dataset_file_name,
             "deeponet": self.deeponet_dataset_file_name,
-            "deeponet_curve": self.deeponet_curve_dataset_file_name,
         }
 
     ############################################################
