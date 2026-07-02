@@ -21,3 +21,16 @@ rad.json
 *.flf
 #Test results file
 TestResults.xml
+
+scratch/
+# Claude Code local settings
+.claude/settings.local.json
+
+/catboost_info
+
+# Python
+__pycache__/
+*.pyc
+
+# 원천 대용량 데이터 (GitHub 100MB 한도 초과; 로컬 보관 / LFS 대상)
+data/raw/

@@ -1,0 +1,38 @@
+# ============================================================================
+# 쓰리스타 ELS 프라이싱 — 단일 설정 파일 (모든 모델 하이퍼파라미터)
+# 피처 목록(데이터 스키마)은 module/data.py 에서 관리, 여기는 학습 파라미터만.
+# ============================================================================
+seed: 0
+device: auto                      # auto|cuda|cpu  (auto: cuda 있으면 cuda)
+
+data:
+  source: data/cache/els3_dataset.parquet   # 원천(피처 완성본; scratch/exp15,17 이 raw->생성)
+  walk_forward: [0.6, 0.7, 0.8, 0.9, 1.0]   # 확장윈도우 폴드 경계 (test=미래 구간)
+  smax: 3.0                                 # 정규화 자산가 상한 (S/SMAX)
+  time_decay: true                          # 시간감쇠 표본가중 0.5^(dt/365.25)
+
+train:                            # 연산자망(DeepONet/PI-DeepONet) 공통
+  nit: 3000
+  batch: 512
+  lr: 0.001
+  weight_decay: 1.0e-5
+
+networks:
+  P: 192                          # trunk/branch 잠재차원
+  mlp_width: 128
+
+physics:                          # PI-DeepONet 물리손실 가중
+  terminal_weight: 0.5
+  pde_weight: 0.1
+  rbf: {Nt: 10, Ns: 18, s: 1.4, nel: 48}    # RBF 미분행렬 도구(보존; 기본 파이프라인 미사용)
+
+tabular:                          # 직접 벤치마크 + 하이브리드 stage-2 마진모델
+  xgb:  {n_estimators: 700, learning_rate: 0.03, max_depth: 7, subsample: 0.8, colsample_bytree: 0.8}
+  lgbm: {n_estimators: 700, learning_rate: 0.03, num_leaves: 63, min_child_samples: 40, subsample: 0.8, colsample_bytree: 0.8}
+  cat:  {iterations: 700, learning_rate: 0.03, depth: 7}
+  gbm:  {max_iter: 500, learning_rate: 0.05, l2_regularization: 1.0}
+  ridge: {alpha: 1.0}
+
+margin:
+  model: xgb                      # 하이브리드 stage-2 잔차모델 종류
+  feature_set: base               # base|regime  (마진모델 피처 세트)
