@@ -44,7 +44,7 @@ BASE = [_new(c) for c in ["sig1", "sig2", "sig3", "rho12", "rho13", "rho23", "si
 REG = ["recent_margin", "recent_mktvol", "curve_level", "curve_slope", "curve_curv", "issue_intensity"]
 CAT = [_new(c) for c in ["issuer", "risk", "ptype", "rdmp", "imonth"]]
 
-# 연산자망 (pi_deeponet.csv / deeponet.csv)
+# 연산자망 (deeponet.csv)
 VOLCORR = ["sig1", "sig2", "sig3", "rho12", "rho13", "rho23", "sig_eff"]   # branch: 바스켓 변동성·상관
 UC = [f"u{j}" for j in range(10)]                                         # branch: 수익률곡선 10노드
 NSTRK = 12
@@ -90,7 +90,8 @@ def _pad(strikes, k=NSTRK):
 
 
 def _load_source():
-    """원천(피처 완성본) + issue_intensity + 전체 STRK 스케줄(raw SCHD 병합)."""
+    """원천 = data/els3_dataset.parquet (0_data build_source가 raw+cache로 생성한 branch·aux + 1_MC_recompute가 갱신한 mc·recent_margin)
+    + issue_intensity + raw SCHD STRK 스케줄."""
     df = pd.read_parquet(fm.source()).sort_values(SRC_ORDER).reset_index(drop=True)
     o = df[SRC_ORDER].tolist()
     df["issue_intensity"] = [bisect.bisect_left(o, o[i]) - bisect.bisect_left(o, o[i] - 90)
@@ -104,7 +105,8 @@ def _load_source():
 
 # ===== 0_data: 데이터셋 생성 (CSV) =====
 def build_datasets():
-    """원천 -> data/ml.csv, data/pi_deeponet.csv, data/deeponet.csv 생성."""
+    """원천 -> data/ml.csv, data/deeponet.csv 생성.
+     ml = tabular(BASE+REG+CAT), deeponet = 연산자망 입력(곡선 u0-9 + vol·corr·sig_eff + 계약 + r). 둘 다 공통(fair·mc·recent_margin) 포함."""
     fm.ensure_dirs()
     df = _load_source()
     common = [INDEX, ORDER, TARGET, ANCHOR, MARGIN]   # INDEX(ITEM_CD) 선두 — 모든 데이터셋에 인덱스 컬럼
@@ -117,20 +119,18 @@ def build_datasets():
         return list(out.columns)
 
     cols_ml = write("ml", [INDEX] + BASE + REG + CAT + common)
-    # PI-DeepONet: branch(vol·corr + 곡선) + trunk(계약) + r(물리) + aux
-    cols_pi = write("pi_deeponet", [INDEX] + VOLCORR + UC + CONTRACT + [RF] + common)
-    # DeepONet(curve, 데이터기반): branch(곡선 + vol·corr) + trunk(계약) + r + aux
+    # DeepONet 연산자망 입력: 곡선 u0-9 + vol·corr·sig_eff + 계약(strk0-11,B,coupon,tenor) + r (stage1 앵커/stage2 D.DON 공용)
     cols_dn = write("deeponet", [INDEX] + UC + VOLCORR + CONTRACT + [RF] + common)
-    return {"ml": len(df), "pi_deeponet": len(df), "deeponet": len(df),
-            "columns": {"ml": cols_ml, "pi_deeponet": cols_pi, "deeponet": cols_dn}}
+    return {"ml": len(df), "deeponet": len(df),
+            "columns": {"ml": cols_ml, "deeponet": cols_dn}}
 
 
 # ===== 1_run: 통합 로딩 =====
 def load(cfg):
     ml = pd.read_csv(fm.dataset("ml"), encoding=CSV_ENC).sort_values(ORDER).reset_index(drop=True)
-    pi = pd.read_csv(fm.dataset("pi_deeponet"), encoding=CSV_ENC).sort_values(ORDER).reset_index(drop=True)
+    don = pd.read_csv(fm.dataset("deeponet"), encoding=CSV_ENC).sort_values(ORDER).reset_index(drop=True)
     n = len(ml)
-    assert len(pi) == n, "데이터셋 행수 불일치"
+    assert len(don) == n, "데이터셋 행수 불일치"
     for c in CAT:
         ml[c] = ml[c].astype(str).astype("category")
 
@@ -143,27 +143,42 @@ def load(cfg):
     D.rm = ml[MARGIN].values.astype("float32")
     D.ITEM = ml[INDEX].astype(str).values   # ITEM_CD 인덱스 (훈련 미사용, 예측 추적용)
     D.ORD = ml[ORDER].values.astype(float)
-    # 연산자망 입력 (branch=vol·corr+곡선, trunk=계약)
-    D.VC = pi[VOLCORR].values.astype("float32")       # (n, 7)
-    D.CURVE = pi[UC].values.astype("float32")         # (n, 10)
-    D.CON = pi[CONTRACT].values.astype("float32")     # (n, 15) = strk12 + BARR + coupon + TENOR
-    D.R = pi[RF].values.astype("float32")             # 물리용 r
-    D.TEN = pi[TENOR].values.astype("float32")        # 만기
-    D.SIGEFF = pi[SIGEFF].values.astype("float32")    # 물리용 σ_eff
+    # 연산자망 입력 (branch=vol·corr+곡선, trunk=계약) — deeponet.csv
+    D.VC = don[VOLCORR].values.astype("float32")      # (n, 7)
+    D.CURVE = don[UC].values.astype("float32")        # (n, 10)
+    D.CON = don[CONTRACT].values.astype("float32")    # (n, 15) = strk12 + BARR + coupon + TENOR
+    D.R = don[RF].values.astype("float32")            # r
+    D.TEN = don[TENOR].values.astype("float32")       # 만기
+    D.SIGEFF = don[SIGEFF].values.astype("float32")   # σ_eff
+    # stage-2 잔차모델 입력 = deeponet.csv 특성 블록 [곡선|vol·corr·sig_eff|계약] (= 앵커 입력, 이론가 결정 특성만; ml aux/범주형 제외)
+    D.DON = np.concatenate([D.CURVE, D.VC, D.CON], axis=1).astype("float32")   # (n, 32)
     # CONTRACT 내 인덱스 (물리/payoff용)
     D.iK = CONTRACT.index(_new("K")) if _new("K") in CONTRACT else NSTRK - 1   # 만기 행사가 = strk_{last}
     D.iKlast = NSTRK - 1
     D.iBARR = CONTRACT.index(BARR)
     D.iCOUPON = CONTRACT.index(COUPON)
     D.iTEN = CONTRACT.index(TENOR)
-    D.WF = walk_forward(n, cfg["data"]["walk_forward"])
+    D.WF = walk_forward(n, cfg["data"]["walk_forward"],
+                        cfg["data"].get("val_frac", 0.0), cfg["data"].get("val_seed", 0))
     return D
 
 
-def walk_forward(n, bounds):
+def walk_forward(n, bounds, val_frac=0.0, val_seed=0):
+    """확장윈도우 walk-forward. 반환: [(tr, va, te)].
+     tr=학습(과거, val 제외) / va=validation(train에서 랜덤샘플, 미래참조 허용, early stopping용) / te=test(미래 OOS).
+     val_frac=0 이면 va=빈배열 (기존 동작)."""
+    rng = np.random.default_rng(val_seed)
     folds = []
     for a, b in zip(bounds[:-1], bounds[1:]):
-        folds.append((np.arange(0, int(a * n)), np.arange(int(a * n), int(b * n))))
+        tr_all = np.arange(0, int(a * n))
+        te = np.arange(int(a * n), int(b * n))
+        if val_frac and len(tr_all) > 10:
+            nv = max(1, int(round(val_frac * len(tr_all))))
+            va = np.sort(rng.choice(tr_all, size=nv, replace=False))
+            tr = np.setdiff1d(tr_all, va, assume_unique=True)
+        else:
+            va = np.empty(0, dtype=int); tr = tr_all
+        folds.append((tr, va, te))
     return folds
 
 

@@ -6,27 +6,27 @@ seed: 0
 device: auto                      # auto|cuda|cpu  (auto: cuda 있으면 cuda)
 
 data:
-  source: data/cache/els3_dataset.parquet   # 원천(피처 완성본; scratch/exp15,17 이 raw->생성)
+  source: data/els3_dataset.parquet         # 0_data(build_source)가 raw+cache 로부터 생성 → 1_MC_recompute가 mc 갱신
   walk_forward: [0.6, 0.7, 0.8, 0.9, 1.0]   # 확장윈도우 폴드 경계 (test=미래 구간)
   smax: 3.0                                 # 정규화 자산가 상한 (S/SMAX)
   time_decay: true                          # 시간감쇠 표본가중 0.5^(dt/365.25)
+  val_frac: 0.12                            # nested walk-forward: 각 폴드 train에서 랜덤샘플 validation (미래참조 허용, 폴드당 1개→총 4개). early stopping용
+  val_seed: 0                               # validation 랜덤 샘플 시드
 
 train:                            # 연산자망(DeepONet/PI-DeepONet) 공통
   nit: 3000
   batch: 512
   lr: 0.001
   weight_decay: 1.0e-5
+  es_every: 100                             # early stopping: val 손실 점검 주기(iter)
+  es_patience: 6                            # early stopping: 개선 없을 때 인내 횟수
+  es_rounds: 50                             # 부스팅(xgb/lgbm/cat) early_stopping_rounds
 
 networks:
   P: 192                          # trunk/branch 잠재차원
   mlp_width: 128
 
-physics:                          # PI-DeepONet 물리손실 가중
-  terminal_weight: 0.5
-  pde_weight: 0.1
-  rbf: {Nt: 10, Ns: 18, s: 1.4, nel: 48}    # RBF 미분행렬 도구(보존; 기본 파이프라인 미사용)
-
-tabular:                          # 직접 벤치마크 + 하이브리드 stage-2 마진모델
+tabular:                          # stage-1 XGB 앵커 + stage-2 XGB 잔차(deeponet 블록 D.DON)
   xgb:  {n_estimators: 700, learning_rate: 0.03, max_depth: 7, subsample: 0.8, colsample_bytree: 0.8}
   lgbm: {n_estimators: 700, learning_rate: 0.03, num_leaves: 63, min_child_samples: 40, subsample: 0.8, colsample_bytree: 0.8}
   cat:  {iterations: 700, learning_rate: 0.03, depth: 7}
