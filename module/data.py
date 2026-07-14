@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """데이터 스키마·생성·로딩. 정통 DeepONet 재설계:
  branch = 시장상태(바스켓 vol·corr + 수익률곡선), trunk = 계약(전체 STRK 스케줄 + 배리어 + 쿠폰 + 만기).
- PI-DeepONet만 trunk에 평가좌표(S,τ,I)를 추가로 넣고 BS-PDE 물리를 건다.
- 컬럼명은 raw DART와 직접 비교되도록 raw 이름 활용. 데이터셋은 CSV.
+ 타깃은 MC 이론가(공정가치 아님). 컬럼명은 raw DART와 직접 비교되도록 raw 이름 활용. 데이터셋은 CSV.
 """
 import bisect
 from types import SimpleNamespace
