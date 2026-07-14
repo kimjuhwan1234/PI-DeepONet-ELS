@@ -97,9 +97,10 @@ jupyter nbconvert --to notebook --execute --inplace 0_data.ipynb
 
 # --- MC 이론가 ---
 # 전량 재계산은 무겁다(단일코어 ~14h). 샤드 결과가 data/cache/ 에 캐시돼 있어 `combine` 이 수 초 만에
-# `mc` 를 복원한다. 처음부터 다시 계산하려면:
+# `mc` 를 복원한다. 처음부터 다시 계산하려면(진행률은 별도 터미널의 monitor 로):
 #   N=28; seq 0 $((N-1)) | xargs -P $N -I {} python -m module.mc_shards shard {} $N
-python -m module.mc_shards combine 28    # els3_dataset.parquet 에 mc + recent_margin 기록
+#   python -m module.mc_shards monitor $N   # 누적 진행률 n/23151 · 처리율 · ETA 한 줄 갱신
+python -m module.mc_shards combine 28    # els3_dataset.parquet 에 mc + recent_margin 기록 (+ heartbeat 정리)
 
 # 1) 모델링 CSV(ml.csv, deeponet.csv) 생성 + MC-vs-공정가 EDA 그림
 jupyter nbconvert --to notebook --execute --inplace 1_MC_recompute.ipynb
@@ -196,9 +197,11 @@ MC 이론가 프라이싱 엔진(재산출 노트북·샤드 스크립트 공용
 
 ### `module/mc_shards.py`
 전량 MC 재산출을 독립 샤드로 병렬화(Windows OOM 방지 위해 `ProcessPool` 회피).
-- CLI `main()`: `shard <k> <N>` 은 `tasks[k::N]` 프라이싱 → `data/cache/mccal_shard_<k>.json`;
-  `combine <N>` 은 전 샤드를 병합해 `els3_dataset.parquet` 에 `mc` + MC 입력 컬럼 + `recent_margin`
-  기록; `test` 는 앞 30행을 단일프로세스로 검증.
+- CLI `main()`: `shard <k> <N>` 은 `tasks[k::N]` 프라이싱 → `data/cache/mccal_shard_<k>.json`
+  (200개마다 `scratch/mc_progress/shard_<k>.json` 에 진행 heartbeat 기록); `monitor <N> [초]` 는 전
+  샤드 heartbeat 를 합산해 누적 진행률·처리율·ETA·완료샤드 수를 한 줄로 갱신 표시; `combine <N>` 은
+  전 샤드를 병합해 `els3_dataset.parquet` 에 `mc` + MC 입력 컬럼 + `recent_margin` 기록(+ heartbeat
+  정리); `test` 는 앞 30행을 단일프로세스로 검증.
 
 ### `module/networks.py`
 DeepONet 아키텍처.
