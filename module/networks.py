@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """정통 DeepONet 재설계.
- PIOperator      : branch=MLP(vol·corr+곡선), trunk=MLP(계약+평가좌표 S,τ,I). BS-PDE 물리.
- CurveOperatorV2 : branch=CNN(곡선)+vol·corr, trunk=MLP(계약). 데이터기반(물리 없음).
- 두 모델 모두 branch=시장상태, trunk=계약 → 내적으로 가격."""
+ CurveOperatorV2 : branch=CNN(곡선)+vol·corr, trunk=MLP(계약). 데이터기반. stage-1 앵커.
+ MarginOperator  : stage-2 잔차 DeepONet(내적). branch=시장상태, trunk=계약 → 내적으로 가격."""
 import torch
 import torch.nn as nn
 
@@ -11,24 +10,8 @@ def mlp(d, p=128):
     return nn.Sequential(nn.Linear(d, p), nn.Tanh(), nn.Linear(p, p), nn.Tanh(), nn.Linear(p, p))
 
 
-class PIOperator(nn.Module):
-    """PI-DeepONet: branch=vol·corr+곡선(정규화), trunk=계약(정규화)+[S/SMAX, τ/tenor, I]."""
-    def __init__(self, nb, ncon, P, smax):
-        super().__init__()
-        self.b = mlp(nb, P)          # branch: 시장상태(vol·corr + 곡선)
-        self.t = mlp(ncon + 3, P)    # trunk: 계약 + 평가좌표(S,τ,I)
-        self.b0 = nn.Parameter(torch.zeros(1))
-        self.smax = smax
-
-    def V(self, bx, cx, S, tau, ten, I):
-        coord = torch.stack([S / self.smax, tau / ten, I], -1)
-        trunk = self.t(torch.cat([cx, coord], -1))
-        return (self.b(bx) * trunk).sum(-1) + self.b0
-
-
 class MarginOperator(nn.Module):
-    """stage-2 잔차 마진 DeepONet: branch=MLP(리스크 vol·corr + 금리 r), trunk=MLP(계약·발행·범주형).
-    내적으로 잔차(FAIR−MC−recent_margin) 회귀."""
+    """stage-2 잔차 DeepONet: branch=MLP(vol·corr·sig_eff), trunk=MLP(곡선+계약). 내적으로 잔차 회귀."""
     def __init__(self, nb, nt, P):
         super().__init__()
         self.b = mlp(nb, P)          # branch: 리스크(vol·corr) + 금리

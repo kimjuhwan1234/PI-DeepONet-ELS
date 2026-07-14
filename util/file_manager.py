@@ -28,12 +28,9 @@ class ELSDirectoryPath:
         self.raw_dir_name = os.path.join(self.data_dir_name, "raw")
         self.cache_dir_name = os.path.join(self.data_dir_name, "cache")
         self.source_file_name = os.path.join(
-            self.cache_dir_name, "els3_dataset.parquet"
+            self.data_dir_name, "els3_dataset.parquet"
         )
         self.ml_dataset_file_name = os.path.join(self.data_dir_name, "ml.csv")
-        self.pi_deeponet_dataset_file_name = os.path.join(
-            self.data_dir_name, "pi_deeponet.csv"
-        )
         self.deeponet_dataset_file_name = os.path.join(
             self.data_dir_name, "deeponet.csv"
         )
@@ -54,7 +51,6 @@ class ELSDirectoryPath:
         # 데이터셋 이름 -> 경로
         self.dataset_files = {
             "ml": self.ml_dataset_file_name,
-            "pi_deeponet": self.pi_deeponet_dataset_file_name,
             "deeponet": self.deeponet_dataset_file_name,
         }
 
@@ -103,7 +99,7 @@ class ELSDirectoryPath:
         return self.source_file_name
 
     def get_dataset_file(self, name: str):
-        """모델링 데이터셋 경로 반환 (name: ml | deeponet | deeponet_curve)"""
+        """모델링 데이터셋 경로 반환 (name: ml | deeponet)"""
         return self.dataset_files[name]
 
     ############################################################
@@ -164,7 +160,7 @@ def ensure_dirs():
 
 
 def dataset(name: str) -> Path:
-    """모델링 데이터셋 경로 (ml | deeponet | deeponet_curve)."""
+    """모델링 데이터셋 경로 (ml | deeponet)."""
     return Path(PATH.get_dataset_file(name))
 
 

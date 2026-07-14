@@ -34,3 +34,17 @@ __pycache__/
 
 # 원천 대용량 데이터 (GitHub 100MB 한도 초과; 로컬 보관 / LFS 대상)
 data/raw/
+data/deeponet.csv
+data/ml.csv
+data/els3_dataset.parquet
+
+
+.agents
+.claude
+.superpowers
+.pytest_cache
+
+docs/
+result/
+
+skills-lock.json

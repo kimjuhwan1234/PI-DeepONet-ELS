@@ -1,0 +1,1 @@
+{"feature": "sig_eff", "kind": "interp", "x": [0.1657071014512938, 0.20546755290725813, 0.22817816892084627, 0.25875787561687624, 0.34336539551032874], "y": [1.5, 1.3704912868027295, 1.3654316598799392, 1.255948960216641, 1.0507651244320533], "note": "continuous piecewise-linear k(sig_eff); knots=quintile-mean sig_eff, y=quintile median k* (step version in calib_kmap_step.json)"}

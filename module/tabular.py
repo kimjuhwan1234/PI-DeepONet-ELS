@@ -13,8 +13,20 @@ from catboost import CatBoostRegressor
 from .data import featnum, CAT, time_weights
 
 
-def fit_tab(D, cfg, model, tr, te, feat, target, tw=True, return_predictor=False):
+def load_tab_predictor(D, path):
+    """fit_tab 이 저장한 .pkl 로드 → predict(idx)->np.array (재학습 없이 forward)."""
+    import joblib
+    ck = joblib.load(path)
+    m = ck["model"]; ct = ck["ct"]; X = D.ml[ck["num"] + ck["cat"]]
+    if ct is not None:   # ridge: ColumnTransformer 적용
+        return lambda idx: m.predict(ct.transform(X.iloc[idx]))
+    return lambda idx: m.predict(X.iloc[idx])
+
+
+def fit_tab(D, cfg, model, tr, te, feat, target, tw=True, va=None, save_path=None, return_predictor=False):
     """train 에만 fit, 시간가중. target: 전체 길이 배열, feat: 'base'|'regime'.
+    va(있으면): xgb/lgbm/cat 는 val 조기종료(early stopping)에 사용 (ridge/gbm 은 미사용).
+    save_path 주면 학습 모델+전처리를 <save_path>.pkl 로 저장(로드용).
     return_predictor=True 이면 (preds, predictor) 반환 — predictor(idx)는 D.ml 행 idx의 예측(추론 속도 측정용)."""
     num = featnum(feat)
     X = D.ml[num + CAT]
@@ -22,6 +34,11 @@ def fit_tab(D, cfg, model, tr, te, feat, target, tw=True, return_predictor=False
     ytr = target[tr]
     w = time_weights(D, tr) if tw else None
     P = cfg["tabular"]
+    es = va is not None and len(va) > 0
+    ES_R = cfg["train"].get("es_rounds", 50)
+    ct = None
+    if es:
+        Xva = X.iloc[va]; yva = target[va]
 
     if model == "ridge":
         ct = ColumnTransformer(
@@ -51,19 +68,35 @@ def fit_tab(D, cfg, model, tr, te, feat, target, tw=True, return_predictor=False
         predictor = lambda idx: m.predict(X.iloc[idx])
     elif model == "lgbm":
         m = lgb.LGBMRegressor(random_state=0, verbose=-1, **P["lgbm"])
-        m.fit(Xtr, ytr, categorical_feature=CAT, sample_weight=w)
+        fkw = dict(categorical_feature=CAT, sample_weight=w)
+        if es:
+            fkw["eval_set"] = [(Xva, yva)]
+            fkw["callbacks"] = [lgb.early_stopping(ES_R, verbose=False)]
+        m.fit(Xtr, ytr, **fkw)
         predictor = lambda idx: m.predict(X.iloc[idx])
     elif model == "cat":
         m = CatBoostRegressor(random_seed=0, verbose=0, cat_features=CAT, **P["cat"])
-        m.fit(Xtr, ytr, sample_weight=w)
+        if es:
+            m.fit(Xtr, ytr, sample_weight=w, eval_set=(Xva, yva), early_stopping_rounds=ES_R)
+        else:
+            m.fit(Xtr, ytr, sample_weight=w)
         predictor = lambda idx: m.predict(X.iloc[idx])
     elif model == "xgb":
-        m = xgb.XGBRegressor(
-            tree_method="hist", enable_categorical=True, random_state=0, **P["xgb"]
-        )
-        m.fit(Xtr, ytr, sample_weight=w)
+        xkw = dict(tree_method="hist", enable_categorical=True, random_state=0, **P["xgb"])
+        if es:
+            xkw["early_stopping_rounds"] = ES_R
+        m = xgb.XGBRegressor(**xkw)
+        if es:
+            m.fit(Xtr, ytr, sample_weight=w, eval_set=[(Xva, yva)], verbose=False)
+        else:
+            m.fit(Xtr, ytr, sample_weight=w)
         predictor = lambda idx: m.predict(X.iloc[idx])
     else:
         raise ValueError(model)
+    if save_path:
+        import os, joblib
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        joblib.dump({"model_key": model, "model": m, "ct": ct, "num": num, "cat": CAT, "feat": feat},
+                    save_path + ".pkl")
     preds = predictor(te)
     return (preds, predictor) if return_predictor else preds
