@@ -47,3 +47,43 @@ def _nll_loss(mu, lv, y, w=None):
     if w is None:
         return per.mean()
     return (per * w).sum() / w.sum()
+
+
+def _mp(name, k):
+    """폴드별 모델 저장 경로 접두(확장자는 각 학습함수가 붙임). name=None 이면 저장 안 함."""
+    if name is None:
+        return None
+    d = fm.RESULT / "models"; d.mkdir(parents=True, exist_ok=True)
+    return str(d / f"{name}_fold{k}")
+
+
+def _predict_hybrid_ci(D, cfg, anchor_fn, resid_ci_fn, name=None, target=None, use_margin=False):
+    """CI 2단계 하이브리드(predict_hybrid 미러링 + CI 컬럼). y=MC_hat+mean, 구간=[y−Z·std, y+Z·std].
+     anchor_fn(D,cfg,tr,va,te,save_path=)->predict(idx)->np.ndarray.
+     resid_ci_fn(D,cfg,tr,va,te,target,save_path=)->(mean_te, std_te)."""
+    tgt = D.MC if target is None else target
+    rm_full = D.rm if use_margin else np.zeros(D.n, dtype="float32")
+    rows = []
+    for k, (tr, va, te) in enumerate(D.WF):
+        anchor_predict = anchor_fn(D, cfg, tr, va, te,
+                                   save_path=_mp(f"{name}_anchor" if name else None, k))
+        sel = np.concatenate([tr, va, te]) if len(va) else np.concatenate([tr, te])
+        mc_hat = np.full(D.n, np.nan, dtype="float32")
+        mc_hat[sel] = np.asarray(anchor_predict(sel), dtype="float32")
+        rt = np.full(D.n, np.nan, dtype="float32")
+        rt[sel] = hybrid_residual_target(tgt[sel], mc_hat[sel], rm_full[sel])
+        mean_te, std_te = resid_ci_fn(D, cfg, tr, va, te, rt,
+                                      save_path=_mp(f"{name}_resid" if name else None, k))
+        mc_te = mc_hat[te]
+        mean_te = np.asarray(mean_te, dtype="float32")
+        y_std = np.asarray(std_te, dtype="float32")
+        y_pred = (mc_te + rm_full[te] + mean_te).astype("float32")
+        rows.append(pd.DataFrame({
+            "ITEM_CD": D.ITEM[te], "isu_ord": D.ORD[te],
+            "y_true": tgt[te], "y_pred": y_pred,
+            "mc_true": D.MC[te], "mc_pred": mc_te,
+            "resid_true": rt[te], "resid_pred": mean_te,
+            "resid_std": y_std, "y_std": y_std,
+            "y_lo": y_pred - Z * y_std, "y_hi": y_pred + Z * y_std,
+        }))
+    return pd.concat(rows, ignore_index=True)
