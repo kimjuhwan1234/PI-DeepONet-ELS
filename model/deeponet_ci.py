@@ -87,3 +87,65 @@ def _predict_hybrid_ci(D, cfg, anchor_fn, resid_ci_fn, name=None, target=None, u
             "y_lo": y_pred - Z * y_std, "y_hi": y_pred + Z * y_std,
         }))
     return pd.concat(rows, ignore_index=True)
+
+
+def nll_resid(D, cfg, tr, va, te, target, return_predict=False, save_path=None):
+    """stage-2 NLL 잔차: 표준화 공간에서 (μ, logσ²) 학습 → 원본 스케일 (mean, std) 반환.
+     don_resid 와 동일한 블록(branch=VC, trunk=[곡선|계약])·표준화·조기종료 규약, 손실만 NLL."""
+    dev = D.DEV; B = cfg["train"]["batch"]; NIT = cfg["train"]["nit"]; P = cfg["networks"]["P"]
+    torch.manual_seed(cfg["seed"])
+    Bmat = D.VC; Tmat = np.concatenate([D.CURVE, D.CON], axis=1)
+    bm, bs = zstats(Bmat, tr); tm, ts = zstats(Tmat, tr)
+    Bt = to_tensor((Bmat - bm) / bs, dev); Tt = to_tensor((Tmat - tm) / ts, dev)
+    ym, ysd = float(target[tr].mean()), float(target[tr].std() + 1e-8)
+    Y = to_tensor((target - ym) / ysd, dev)
+    net = MarginOperatorNLL(Bt.shape[1], Tt.shape[1], P).to(dev); opt = _opt(net, cfg)
+    trt = torch.tensor(tr, device=dev)
+    if cfg["data"]["time_decay"]:
+        wsamp = torch.tensor(time_weights(D, tr), device=dev, dtype=torch.float32)
+    else:
+        wsamp = torch.ones(len(tr), device=dev)
+
+    def _vloss(vi):
+        mu, lv = net(Bt[vi], Tt[vi])
+        return _nll_loss(mu, lv, Y[vi])
+
+    es = _EarlyStop(net, cfg, va, dev)
+    for it in range(NIT):
+        bb = trt[torch.multinomial(wsamp, B, replacement=True)]
+        mu, lv = net(Bt[bb], Tt[bb])
+        opt.zero_grad(); _nll_loss(mu, lv, Y[bb]).backward(); opt.step()
+        if es.step(it, _vloss):
+            break
+    es.restore(); net.eval()
+    if save_path:
+        import os
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        torch.save({"state": net.state_dict(), "P": P, "nb": Bt.shape[1], "nt": Tt.shape[1],
+                    "bm": bm, "bs": bs, "tm": tm, "ts": ts, "ym": ym, "ysd": ysd}, save_path + ".pt")
+
+    def predict(idx):
+        with torch.no_grad():
+            i = torch.tensor(np.asarray(idx), device=dev)
+            mu, lv = net(Bt[i], Tt[i])
+            lvc = lv.clamp(float(np.log(LAM)), LV_MAX)
+            mean = (mu * ysd + ym).cpu().numpy().astype("float32")
+            std = (torch.exp(0.5 * lvc) * ysd).cpu().numpy().astype("float32")
+            return mean, std
+
+    mean_te, std_te = predict(te)
+    return (mean_te, std_te, predict) if return_predict else (mean_te, std_te)
+
+
+def _anchor(D, cfg, tr, va, te, save_path=None):
+    """stage-1 앵커: MC 이론가 예측기(train_curve 재사용). deeponet.py 와 동일."""
+    *_, predict = train_curve(D, cfg, tr, te, target=D.MC, va=va,
+                              save_path=save_path, return_predict=True)
+    return predict
+
+
+def run(D, cfg):
+    # 이론가(MC) 2단계 CI 하이브리드 하나: y=MC_hat+μ, 구간=[y−2s, y+2s].
+    return {"deeponet_hybrid_ci": _predict_hybrid_ci(
+        D, cfg, _anchor, nll_resid, name="deeponet_hybrid_ci",
+        target=D.MC, use_margin=False)}

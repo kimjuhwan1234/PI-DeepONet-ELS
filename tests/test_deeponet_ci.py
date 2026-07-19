@@ -80,3 +80,66 @@ def test_predict_hybrid_ci_columns_and_interval():
     assert (df["resid_std"].values > 0).all()
     np.testing.assert_allclose((df["y_hi"] - df["y_lo"]).values,
                                2 * Z * np.array([0.03, 0.05]), atol=1e-6)
+
+
+from model import registry
+
+
+def _fake_full_D(n=24):
+    rng = np.random.RandomState(0)
+    tr = np.arange(0, 16); va = np.arange(16, 20); te = np.arange(20, 24)
+    return SimpleNamespace(
+        n=n,
+        WF=[(tr, va, te)],
+        CURVE=rng.rand(n, 10).astype("float32"),
+        VC=rng.rand(n, 7).astype("float32"),
+        CON=rng.rand(n, 15).astype("float32"),
+        MC=(0.9 + 0.1 * rng.rand(n)).astype("float32"),
+        rm=np.zeros(n, dtype="float32"),
+        ITEM=np.array([f"IT{i}" for i in range(n)]),
+        ORD=np.arange(n, dtype=float),
+        DEV=torch.device("cpu"),
+    )
+
+
+def _smoke_cfg():
+    return {
+        "seed": 0,
+        "train": {"nit": 30, "batch": 8, "lr": 1e-3, "weight_decay": 1e-5,
+                  "es_every": 100, "es_patience": 6, "es_rounds": 50},
+        "networks": {"P": 16},
+        "data": {"time_decay": False},
+    }
+
+
+def test_run_smoke_end_to_end(tmp_path, monkeypatch):
+    import model.deeponet_ci as m
+    monkeypatch.setattr(m.fm, "RESULT", tmp_path)   # result/ 오염 방지
+    D = _fake_full_D()
+    out = m.run(D, _smoke_cfg())
+    assert set(out.keys()) == {"deeponet_hybrid_ci"}
+    df = out["deeponet_hybrid_ci"]
+    cols = {"ITEM_CD", "isu_ord", "y_true", "y_pred", "mc_true", "mc_pred",
+            "resid_true", "resid_pred", "resid_std", "y_std", "y_lo", "y_hi"}
+    assert cols.issubset(df.columns)
+    assert len(df) == 4                              # test 폴드 크기
+    assert np.isfinite(df["y_pred"].values).all()
+    assert (df["y_std"].values > 0).all()
+    assert (df["y_lo"].values <= df["y_pred"].values).all()
+    assert (df["y_pred"].values <= df["y_hi"].values).all()
+
+
+def test_nll_resid_returns_positive_std(tmp_path, monkeypatch):
+    import model.deeponet_ci as m
+    D = _fake_full_D()
+    tr, va, te = D.WF[0]
+    target = (D.MC - D.MC.mean()).astype("float32")   # 임의 잔차 타깃
+    mean_te, std_te = m.nll_resid(D, _smoke_cfg(), tr, va, te, target)
+    assert mean_te.shape == te.shape and std_te.shape == te.shape
+    assert np.isfinite(mean_te).all()
+    assert (std_te > 0).all()
+
+
+def test_registry_discovers_deeponet_ci():
+    names = [n for n, _ in registry.discover()]
+    assert "deeponet_ci" in names
