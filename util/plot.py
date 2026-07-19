@@ -328,3 +328,31 @@ def mc_pred_ci_band(m, path=None, conf=0.90):
     ax.grid(color=_MC_GRID, lw=0.6, alpha=0.5); ax.legend(loc="upper left")
     fig.tight_layout(); _save(fig, path)
     return fig
+
+
+def mc_pred_ci_calibrated(m, path=None, conf=0.90):
+    """분산 재보정(variance recalibration) 후 신뢰구간 — 이탈점이 적음을 정직하게 보임.
+     raw NLL σ 가 과신이라, held-out 절반에서 보정배수 k=quantile_conf(|actual−μ|/σ) 추정 →
+     나머지 절반에 μ±k·σ 적용·표시(커버리지도 그 절반에서 계산 → 낙관 편향 없음). m: [y_true,y_pred,y_std]."""
+    d = m.sort_values("y_true").reset_index(drop=True)
+    n = len(d)
+    yt = d["y_true"].to_numpy(); mu = d["y_pred"].to_numpy(); sd = np.maximum(d["y_std"].to_numpy(), 1e-12)
+    zc = np.abs(yt - mu) / sd
+    cal = (np.arange(n) % 2 == 0); disp = ~cal          # 짝=보정, 홀=표시/검증
+    k = float(np.quantile(zc[cal], conf))               # conf 커버리지를 주는 σ 배수(보정)
+    lo = mu - k * sd; hi = mu + k * sd
+    out = (yt < lo) | (yt > hi)
+    cov_disp = (1 - out[disp].mean()) * 100
+    xd = np.arange(disp.sum()); dd = d[disp].reset_index(drop=True)
+    lo_d, hi_d, yt_d, out_d = lo[disp], hi[disp], yt[disp], out[disp]
+    fig, ax = plt.subplots(figsize=(SLIDE_W, BAND_H))
+    ax.fill_between(xd, lo_d, hi_d, color="#2a9d8f", alpha=0.45, linewidth=0,
+                    label=f"calibrated {conf*100:.0f}% interval [μ ± {k:.2f}s]")
+    ax.scatter(xd[out_d], yt_d[out_d], s=14, color="#111111", alpha=0.8, edgecolors="white",
+               linewidth=0.2, zorder=3, label=f"actual outside interval ({out_d.mean()*100:.0f}%)")
+    ax.set_xlabel("Held-out products sorted by theoretical price (MC)"); ax.set_ylabel("Price")
+    ax.set_title(f"MC {conf*100:.0f}% interval after variance recalibration (σ×{k/float(norm.ppf(0.5+conf/2)):.1f})  "
+                 f"— coverage {cov_disp:.0f}% ≈ target {conf*100:.0f}%, few escapes")
+    ax.grid(color=_MC_GRID, lw=0.6, alpha=0.5); ax.legend(loc="upper left")
+    fig.tight_layout(); _save(fig, path)
+    return fig
