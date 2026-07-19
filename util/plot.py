@@ -308,17 +308,21 @@ def mc_ci_calibration(m, seg_col="sig_eff", seg_label="volatility  σ_eff", path
 
 
 def mc_pred_ci_band(m, path=None):
-    """상품을 실제 MC로 정렬해 예측·실제선 + 신뢰밴드 (논문 Fig8 스타일). m: [y_true,y_pred,y_lo,y_hi]."""
+    """신뢰구간(빨강 밴드)만 표시 + 구간을 벗어난 actual 만 점으로 (커버리지 실패 = 과신 가시화).
+     m: [y_true,y_lo,y_hi]. 상품을 실제 MC로 정렬."""
     d = m.sort_values("y_true").reset_index(drop=True)
     x = np.arange(len(d))
+    yt = d["y_true"].to_numpy()
+    mask = ((d["y_true"] < d["y_lo"]) | (d["y_true"] > d["y_hi"])).to_numpy()   # 구간 밖 actual
+    cov = (1 - mask.mean()) * 100
     fig, ax = plt.subplots(figsize=(SLIDE_W, BAND_H))
     ax.fill_between(x, d["y_lo"], d["y_hi"], color="#e74c3c", alpha=0.45, linewidth=0,
-                    label="95% interval [μ−2s, μ+2s]")   # 빨강 = 파란 예측점과 대비(가시성)
-    # μ 는 점(scatter)으로 — 선으로 연결하면 μ 지그재그가 밴드보다 넓게 그려져 밴드를 덮음
-    ax.scatter(x, d["y_pred"], s=1.5, color=_MC_DEEP, alpha=0.30, edgecolors="none", label="predicted μ")
-    ax.plot(x, d["y_true"], lw=1.6, color=_MC_INK, label="actual MC (theoretical)")
+                    label="95% interval [μ−2s, μ+2s]")
+    ax.scatter(x[mask], yt[mask], s=3, color=_MC_INK, alpha=0.55, edgecolors="none",
+               label=f"actual outside interval ({mask.mean()*100:.0f}%)")
     ax.set_xlabel("Products sorted by theoretical price (MC)"); ax.set_ylabel("Price")
-    ax.set_title("MC prediction with confidence band  (walk-forward OOS, sorted by actual)")
+    ax.set_title(f"MC 95% interval & out-of-interval actuals  "
+                 f"(coverage {cov:.0f}% vs target 95%, walk-forward OOS)")
     ax.grid(color=_MC_GRID, lw=0.6, alpha=0.5); ax.legend(loc="upper left")
     fig.tight_layout(); _save(fig, path)
     return fig
