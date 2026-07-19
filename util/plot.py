@@ -9,7 +9,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import r2_score
-from scipy.stats import spearmanr
+from scipy.stats import spearmanr, norm
 
 SLIDE = (13.333, 7.5)      # PowerPoint 16:9 widescreen (inches)
 SLIDE_W = 13.333           # 슬라이드 폭 (측면 여백 포함 full)
@@ -173,4 +173,151 @@ def stage_r2_bar(stage_df, path=None):
     ax.legend(fontsize=9.5, loc="center left", bbox_to_anchor=(1.01, 0.5))   # 우측 범례 = 제목과 겹침 방지
     fig.tight_layout()
     _save(fig, path)
+    return fig
+
+
+# ============================================================================
+# 이론가(MC) 예측 세분화 그림 (task#2 발표용). 입력은 이미 병합된 DataFrame m.
+#  m 필수 컬럼: y_true, y_pred (+그림별로 y_std/y_lo/y_hi, 'fold', 세분화 축, 'ape', 'cov').
+#  magnitude 는 단일 hue 시퀀셜(Blues), 식별은 고정색 — colorblind-safe(적녹 회피).
+# ============================================================================
+_SEQ = "Blues"     # magnitude 시퀀셜 컬러맵
+_MC_BLUE = "#5aa9dd"; _MC_DEEP = "#1f6f9c"; _MC_INK = "#333333"; _MC_GRID = "#cccccc"
+
+
+def _qbins(x, k):
+    """분위수 경계로 최대 k구간. 반환 (bin_idx[0..K-1], edge_labels[K]). 중복 경계는 병합."""
+    qs = np.quantile(x, np.linspace(0, 1, k + 1))
+    qs[0] -= 1e-9; qs[-1] += 1e-9
+    qs = np.unique(qs)
+    idx = np.clip(np.digitize(x, qs[1:-1]), 0, len(qs) - 2)
+    labs = [f"{qs[i]:.2f}–{qs[i+1]:.2f}" for i in range(len(qs) - 1)]
+    return idx, labs
+
+
+def mc_error_heatmap(m, xcol, ycol, xlabel, ylabel, path=None, kx=5, ky=5, title=None, min_n=15):
+    """두 연속축(분위수 격자)의 평균 MAPE% 히트맵. m: [xcol, ycol, 'ape']. 표본 부족 셀은 공백."""
+    bx, lx = _qbins(m[xcol].values, kx)
+    by, ly = _qbins(m[ycol].values, ky)
+    kx = len(lx); ky = len(ly)
+    ape = m["ape"].values
+    H = np.full((ky, kx), np.nan)
+    for i in range(ky):
+        for j in range(kx):
+            sel = (by == i) & (bx == j)
+            if sel.sum() >= min_n:
+                H[i, j] = ape[sel].mean()
+    fig, ax = plt.subplots(figsize=(SLIDE_W * 0.62, BAND_H))
+    im = ax.imshow(H, origin="lower", cmap=_SEQ, aspect="auto")
+    ax.set_xticks(range(kx)); ax.set_xticklabels(lx, rotation=30, ha="right", fontsize=8.5)
+    ax.set_yticks(range(ky)); ax.set_yticklabels(ly, fontsize=8.5)
+    ax.set_xlabel(xlabel); ax.set_ylabel(ylabel)
+    hi = np.nanmax(H)
+    for i in range(ky):
+        for j in range(kx):
+            if not np.isnan(H[i, j]):
+                ax.text(j, i, f"{H[i, j]:.2f}", ha="center", va="center", fontsize=8,
+                        color="white" if H[i, j] > hi * 0.6 else _MC_INK)
+    cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.02)
+    cb.set_label("MAPE %  (higher = larger pricing error)", fontsize=9)
+    ax.set_title(title or f"MC prediction error by {xlabel} × {ylabel}")
+    fig.tight_layout(); _save(fig, path)
+    return fig
+
+
+def mc_error_by_segment(m, segs, path=None, nbin=6,
+                        title="MC prediction error by contract segment  (walk-forward OOS)"):
+    """세분화 축별 MAPE% 바 (2열 그리드). m: ['ape'] + 각 seg col. segs: list of (col, label)."""
+    n = len(segs); nrow = int(np.ceil(n / 2))
+    fig, axs = plt.subplots(nrow, 2, figsize=(SLIDE_W, BAND_H))
+    axl = np.atleast_1d(axs).ravel(); ape = m["ape"].values
+    for a, (col, lab) in zip(axl, segs):
+        bidx, labs = _qbins(m[col].values, nbin)
+        vals = [ape[bidx == i].mean() for i in range(len(labs))]
+        x = np.arange(len(labs))
+        a.bar(x, vals, color=_MC_BLUE, edgecolor="white", linewidth=0.5)
+        a.set_xticks(x); a.set_xticklabels(labs, rotation=30, ha="right", fontsize=7.5)
+        a.set_ylabel("MAPE %"); a.set_title(lab, fontsize=11)
+        a.grid(axis="y", color=_MC_GRID, lw=0.6, alpha=0.5)
+        for i, v in enumerate(vals):
+            a.text(i, v, f"{v:.2f}", ha="center", va="bottom", fontsize=7.5)
+        a.margins(y=0.16)
+    for a in axl[n:]:
+        a.axis("off")
+    fig.suptitle(title, fontsize=12, fontweight="bold")
+    fig.tight_layout(rect=(0, 0, 1, 0.96)); _save(fig, path)
+    return fig
+
+
+def mc_oos_drift(m, path=None):
+    """walk-forward 폴드(시간)별 R²·MAPE% 라인 (dual-axis 회피 → 2패널). m: ['fold','y_true','y_pred','ape']."""
+    ks = sorted(m["fold"].unique())
+    r2 = [r2_score(m.loc[m.fold == k, "y_true"], m.loc[m.fold == k, "y_pred"]) for k in ks]
+    mape = [m.loc[m.fold == k, "ape"].mean() for k in ks]
+    xl = [f"Fold {int(k)+1}\n(future slice)" for k in ks]
+    fig, ax = plt.subplots(1, 2, figsize=(SLIDE_W, BAND_H))
+    ax[0].plot(range(len(ks)), r2, marker="o", ms=7, lw=2.0, color=_MC_DEEP)
+    ax[0].set_xticks(range(len(ks))); ax[0].set_xticklabels(xl, fontsize=9)
+    ax[0].set_ylabel("R²"); ax[0].set_title("R² across time (later fold = further OOS)")
+    ax[0].grid(color=_MC_GRID, lw=0.6, alpha=0.5)
+    for i, v in enumerate(r2):
+        ax[0].text(i, v, f"{v:.3f}", ha="center", va="bottom", fontsize=8.5)
+    ax[1].plot(range(len(ks)), mape, marker="s", ms=7, lw=2.0, color=_MC_BLUE)
+    ax[1].set_xticks(range(len(ks))); ax[1].set_xticklabels(xl, fontsize=9)
+    ax[1].set_ylabel("MAPE %"); ax[1].set_title("MAPE % across time")
+    ax[1].grid(color=_MC_GRID, lw=0.6, alpha=0.5)
+    for i, v in enumerate(mape):
+        ax[1].text(i, v, f"{v:.3f}", ha="center", va="bottom", fontsize=8.5)
+    fig.suptitle("Out-of-sample stability of MC prediction over the walk-forward horizon",
+                 fontsize=12, fontweight="bold")
+    fig.tight_layout(rect=(0, 0, 1, 0.96)); _save(fig, path)
+    return fig
+
+
+def mc_ci_calibration(m, seg_col="sig_eff", seg_label="volatility  σ_eff", path=None):
+    """신뢰구간 캘리브레이션: (좌) reliability curve, (우) 세분화 축별 95% 커버리지.
+     m: [y_true,y_pred,y_std,'cov'] + seg_col."""
+    err = np.abs(m["y_true"].values - m["y_pred"].values)
+    sig = np.maximum(m["y_std"].values, 1e-12)
+    nominal = np.array([0.50, 0.68, 0.80, 0.90, 0.95, 0.99])
+    z = norm.ppf(0.5 + nominal / 2)
+    emp = np.array([(err <= zz * sig).mean() for zz in z])
+    fig, ax = plt.subplots(1, 2, figsize=(SLIDE_W, BAND_H))
+    ax[0].plot([0, 1], [0, 1], "--", color="#888888", lw=1.4, label="ideal (calibrated)")
+    ax[0].plot(nominal, emp, marker="o", ms=7, lw=2.0, color=_MC_DEEP, label="model (aleatoric σ)")
+    ax[0].set_xlabel("Nominal coverage"); ax[0].set_ylabel("Empirical coverage")
+    ax[0].set_title("Reliability curve — over-confident if below diagonal")
+    ax[0].grid(color=_MC_GRID, lw=0.6, alpha=0.5); ax[0].legend(loc="upper left")
+    for xN, yE in zip(nominal, emp):
+        ax[0].text(xN, yE - 0.03, f"{yE*100:.0f}%", ha="center", va="top", fontsize=8, color=_MC_DEEP)
+    bidx, labs = _qbins(m[seg_col].values, 6)
+    cov = [m["cov"].values[bidx == i].mean() * 100 for i in range(len(labs))]
+    x = np.arange(len(labs))
+    ax[1].bar(x, cov, color=_MC_BLUE, edgecolor="white", linewidth=0.5)
+    ax[1].axhline(95, color="#c0392b", lw=1.4, ls="--")
+    ax[1].text(len(labs) - 0.5, 95, " target 95%", color="#c0392b", va="bottom", ha="right", fontsize=9)
+    ax[1].set_xticks(x); ax[1].set_xticklabels(labs, rotation=30, ha="right", fontsize=7.5)
+    ax[1].set_ylabel("Empirical coverage %"); ax[1].set_title(f"95% interval coverage by {seg_label}")
+    ax[1].grid(axis="y", color=_MC_GRID, lw=0.6, alpha=0.5)
+    for i, v in enumerate(cov):
+        ax[1].text(i, v, f"{v:.0f}", ha="center", va="bottom", fontsize=8)
+    fig.suptitle("Confidence-interval calibration (Gaussian NLL, aleatoric)  — walk-forward OOS",
+                 fontsize=12, fontweight="bold")
+    fig.tight_layout(rect=(0, 0, 1, 0.96)); _save(fig, path)
+    return fig
+
+
+def mc_pred_ci_band(m, path=None):
+    """상품을 실제 MC로 정렬해 예측·실제선 + 신뢰밴드 (논문 Fig8 스타일). m: [y_true,y_pred,y_lo,y_hi]."""
+    d = m.sort_values("y_true").reset_index(drop=True)
+    x = np.arange(len(d))
+    fig, ax = plt.subplots(figsize=(SLIDE_W, BAND_H))
+    ax.fill_between(x, d["y_lo"], d["y_hi"], color=_MC_BLUE, alpha=0.25, linewidth=0,
+                    label="95% interval [μ−2s, μ+2s]")
+    ax.plot(x, d["y_pred"], lw=0.8, color=_MC_DEEP, alpha=0.9, label="predicted μ")
+    ax.plot(x, d["y_true"], lw=1.6, color=_MC_INK, label="actual MC (theoretical)")
+    ax.set_xlabel("Products sorted by theoretical price (MC)"); ax.set_ylabel("Price")
+    ax.set_title("MC prediction with confidence band  (walk-forward OOS, sorted by actual)")
+    ax.grid(color=_MC_GRID, lw=0.6, alpha=0.5); ax.legend(loc="upper left")
+    fig.tight_layout(); _save(fig, path)
     return fig
