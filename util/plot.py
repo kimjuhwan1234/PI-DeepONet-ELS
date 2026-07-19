@@ -320,8 +320,8 @@ def mc_pred_ci_band(m, path=None, conf=0.90):
     fig, ax = plt.subplots(figsize=(SLIDE_W, BAND_H))
     ax.fill_between(x, lo, hi, color="#e74c3c", alpha=0.45, linewidth=0,
                     label=f"{conf*100:.0f}% interval [μ ± {z:.2f}s]")
-    ax.scatter(x[mask], yt[mask], s=3, color=_MC_INK, alpha=0.55, edgecolors="none",
-               label=f"actual outside interval ({mask.mean()*100:.0f}%)")
+    ax.scatter(x[mask], yt[mask], s=14, color="#111111", alpha=0.8, edgecolors="white", linewidth=0.2,
+               zorder=3, label=f"actual outside interval ({mask.mean()*100:.0f}%)")
     ax.set_xlabel("Products sorted by theoretical price (MC)"); ax.set_ylabel("Price")
     ax.set_title(f"MC {conf*100:.0f}% interval & out-of-interval actuals  "
                  f"(coverage {cov:.0f}% vs target {conf*100:.0f}%, walk-forward OOS)")
