@@ -312,9 +312,10 @@ def mc_pred_ci_band(m, path=None):
     d = m.sort_values("y_true").reset_index(drop=True)
     x = np.arange(len(d))
     fig, ax = plt.subplots(figsize=(SLIDE_W, BAND_H))
-    ax.fill_between(x, d["y_lo"], d["y_hi"], color=_MC_BLUE, alpha=0.25, linewidth=0,
-                    label="95% interval [μ−2s, μ+2s]")
-    ax.plot(x, d["y_pred"], lw=0.8, color=_MC_DEEP, alpha=0.9, label="predicted μ")
+    ax.fill_between(x, d["y_lo"], d["y_hi"], color="#e74c3c", alpha=0.45, linewidth=0,
+                    label="95% interval [μ−2s, μ+2s]")   # 빨강 = 파란 예측점과 대비(가시성)
+    # μ 는 점(scatter)으로 — 선으로 연결하면 μ 지그재그가 밴드보다 넓게 그려져 밴드를 덮음
+    ax.scatter(x, d["y_pred"], s=1.5, color=_MC_DEEP, alpha=0.30, edgecolors="none", label="predicted μ")
     ax.plot(x, d["y_true"], lw=1.6, color=_MC_INK, label="actual MC (theoretical)")
     ax.set_xlabel("Products sorted by theoretical price (MC)"); ax.set_ylabel("Price")
     ax.set_title("MC prediction with confidence band  (walk-forward OOS, sorted by actual)")
