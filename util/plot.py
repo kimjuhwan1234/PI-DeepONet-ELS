@@ -307,22 +307,24 @@ def mc_ci_calibration(m, seg_col="sig_eff", seg_label="volatility  σ_eff", path
     return fig
 
 
-def mc_pred_ci_band(m, path=None):
+def mc_pred_ci_band(m, path=None, conf=0.90):
     """신뢰구간(빨강 밴드)만 표시 + 구간을 벗어난 actual 만 점으로 (커버리지 실패 = 과신 가시화).
-     m: [y_true,y_lo,y_hi]. 상품을 실제 MC로 정렬."""
+     구간은 저장된 μ(y_pred)·σ(y_std)로 임의 신뢰수준 conf 에서 재계산: μ ± z·σ. m: [y_true,y_pred,y_std]."""
+    z = float(norm.ppf(0.5 + conf / 2))
     d = m.sort_values("y_true").reset_index(drop=True)
     x = np.arange(len(d))
-    yt = d["y_true"].to_numpy()
-    mask = ((d["y_true"] < d["y_lo"]) | (d["y_true"] > d["y_hi"])).to_numpy()   # 구간 밖 actual
+    yt = d["y_true"].to_numpy(); mu = d["y_pred"].to_numpy(); sd = d["y_std"].to_numpy()
+    lo = mu - z * sd; hi = mu + z * sd
+    mask = (yt < lo) | (yt > hi)                      # 구간 밖 actual
     cov = (1 - mask.mean()) * 100
     fig, ax = plt.subplots(figsize=(SLIDE_W, BAND_H))
-    ax.fill_between(x, d["y_lo"], d["y_hi"], color="#e74c3c", alpha=0.45, linewidth=0,
-                    label="95% interval [μ−2s, μ+2s]")
+    ax.fill_between(x, lo, hi, color="#e74c3c", alpha=0.45, linewidth=0,
+                    label=f"{conf*100:.0f}% interval [μ ± {z:.2f}s]")
     ax.scatter(x[mask], yt[mask], s=3, color=_MC_INK, alpha=0.55, edgecolors="none",
                label=f"actual outside interval ({mask.mean()*100:.0f}%)")
     ax.set_xlabel("Products sorted by theoretical price (MC)"); ax.set_ylabel("Price")
-    ax.set_title(f"MC 95% interval & out-of-interval actuals  "
-                 f"(coverage {cov:.0f}% vs target 95%, walk-forward OOS)")
+    ax.set_title(f"MC {conf*100:.0f}% interval & out-of-interval actuals  "
+                 f"(coverage {cov:.0f}% vs target {conf*100:.0f}%, walk-forward OOS)")
     ax.grid(color=_MC_GRID, lw=0.6, alpha=0.5); ax.legend(loc="upper left")
     fig.tight_layout(); _save(fig, path)
     return fig
