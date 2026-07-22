@@ -330,6 +330,69 @@ def mc_pred_ci_band(m, path=None, conf=0.90):
     return fig
 
 
+_SPLIT_LABELMAP = {"baseline": "baseline", "drop_curve": "drop curve", "drop_volcorr": "drop vol·corr",
+                   "drop_contract": "drop contract", "baseline_don": "baseline (DeepONet s2)",
+                   "nllci": "nll-ci (DeepONet s2)"}
+
+
+def two_split_bars(df, path=None, r2_floor=-0.5, mape_cap=2.0, label_map=None, title=None):
+    """random 7:3 vs walk-forward feature-ablation 비교 (가로 막대 2패널: 좌 R², 우 MAPE%).
+     df: ['config','split','R2','MAPE%'], split ∈ {'random7:3','walk-forward'}.
+     random=미래표본 누수로 낙관적(interpolation), walk-forward=진짜 시간 OOS.
+     off-scale(강한 음수 R²·큰 MAPE)는 축을 r2_floor/mape_cap 로 제한하고 막대를 끝까지 그린 뒤 실제값을 빨강으로 표기."""
+    lmap = dict(_SPLIT_LABELMAP); lmap.update(label_map or {})
+    cfgs = list(dict.fromkeys(df["config"]))              # CSV 등장 순서 유지
+    y = np.arange(len(cfgs)); h = 0.38
+    BLUE, ORANGE, OFF = _MC_BLUE, "#e07a5f", "#c0392b"
+
+    def val(cfg, sp, col):
+        r = df[(df["config"] == cfg) & (df["split"] == sp)]
+        return float(r[col].iloc[0]) if len(r) else np.nan
+
+    fig, ax = plt.subplots(1, 2, figsize=(SLIDE_W, 5.6))
+    # 좌: R² (floor 로 클립, off-scale 는 실제값 빨강)
+    a = ax[0]
+    for cfg, yi in zip(cfgs, y):
+        for sp, off, color in [("walk-forward", -h / 2, ORANGE), ("random7:3", h / 2, BLUE)]:
+            v = val(cfg, sp, "R2")
+            if not np.isfinite(v):
+                continue
+            drawn = max(v, r2_floor); offs = v < r2_floor
+            a.barh(yi + off, drawn, height=h, color=color, edgecolor="white", lw=0.5)
+            a.text(drawn + (-0.012 if drawn < 0 else 0.012), yi + off, f"{v:.3f}",
+                   va="center", ha="right" if drawn < 0 else "left",
+                   fontsize=8.5, fontweight="bold" if offs else "normal", color=OFF if offs else _MC_INK)
+    a.axvline(0, color=_MC_INK, lw=0.8)
+    a.set_yticks(y); a.set_yticklabels([lmap.get(c, c) for c in cfgs], fontsize=9.5)
+    a.set_xlim(r2_floor - 0.06, 1.14); a.invert_yaxis()
+    a.set_xlabel("final MC R²"); a.set_title("R²  (higher better)")
+    a.grid(axis="x", color=_MC_GRID, lw=0.6, alpha=0.5)
+    # 우: MAPE% (cap 으로 클립)
+    a = ax[1]
+    for cfg, yi in zip(cfgs, y):
+        for sp, off, color in [("walk-forward", -h / 2, ORANGE), ("random7:3", h / 2, BLUE)]:
+            v = val(cfg, sp, "MAPE%")
+            if not np.isfinite(v):
+                continue
+            drawn = min(v, mape_cap); offs = v > mape_cap
+            a.barh(yi + off, drawn, height=h, color=color, edgecolor="white", lw=0.5)
+            a.text(drawn + 0.02, yi + off, f"{v:.2f}", va="center", ha="left",
+                   fontsize=8.5, fontweight="bold" if offs else "normal", color=OFF if offs else _MC_INK)
+    a.set_yticks(y); a.set_yticklabels([lmap.get(c, c) for c in cfgs], fontsize=9.5)
+    a.set_xlim(0, mape_cap + 0.16); a.invert_yaxis()
+    a.set_xlabel("MAPE %"); a.set_title("MAPE %  (lower better)")
+    a.grid(axis="x", color=_MC_GRID, lw=0.6, alpha=0.5)
+
+    from matplotlib.patches import Patch
+    handles = [Patch(facecolor=BLUE, label="random 7:3 (interpolation)"),
+               Patch(facecolor=ORANGE, label="walk-forward (temporal OOS)")]
+    fig.legend(handles=handles, loc="lower center", ncol=2, frameon=False, fontsize=10.5, bbox_to_anchor=(0.5, -0.01))
+    fig.suptitle(title or "Feature-ablation — R²/MAPE, random 7:3 vs walk-forward  (red = off-scale, true value shown)",
+                 fontsize=12.5, fontweight="bold")
+    fig.tight_layout(rect=(0, 0.05, 1, 0.95)); _save(fig, path)
+    return fig
+
+
 def mc_pred_ci_calibrated(m, path=None, conf=0.90):
     """분산 재보정(variance recalibration) 후 신뢰구간 — 이탈점이 적음을 정직하게 보임.
      raw NLL σ 가 과신이라, held-out 절반에서 보정배수 k=quantile_conf(|actual−μ|/σ) 추정 →
